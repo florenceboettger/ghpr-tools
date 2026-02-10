@@ -11,7 +11,7 @@ import sys
 import time
 
 _base_url = 'https://api.github.com/'
-_pulls_url_template = _base_url + 'repos/{owner}/{repo}/pulls?state=closed&sort=created&direction=asc&per_page={per_page}&page={page}'
+_pulls_url_template = _base_url + 'repos/{owner}/{repo}/pulls?state=closed&sort=created&direction=desc&per_page={per_page}&page={page}'
 _pull_url_template = _base_url + 'repos/{owner}/{repo}/pulls/{pull_number}'
 _issue_url_template = _base_url + 'repos/{owner}/{repo}/issues/{issue_number}'
 
@@ -68,6 +68,7 @@ class Crawler(object):
         max_request_tries (int): Number of times to try a request before
             terminating.
         request_retry_wait_secs (int): Seconds to wait before retrying a failed request.
+        max_pull_number (int): Maximun number of pull requests to crawl.
     """
 
     def __init__(self,
@@ -76,7 +77,8 @@ class Crawler(object):
                  per_page=100,
                  save_pull_pages=False,
                  max_request_tries=100,
-                 request_retry_wait_secs=10):
+                 request_retry_wait_secs=10,
+                 max_issue_number=-1):
         """Initializes Crawler.
 
         The GitHub API limits unauthenticated clients to 60 requests per hour. The
@@ -105,6 +107,7 @@ class Crawler(object):
         }
         if token is not None:
             self._headers['Authorization'] = 'token ' + token
+        self._max_issue_number = max_issue_number
         self._interrupted = False
         def sigint_handler(signal, frame):
             if self._interrupted:
@@ -146,7 +149,7 @@ class Crawler(object):
         num_issues = 0
         num_pulls = 0
         self._interrupted = False
-        while not self._interrupted:
+        while not self._interrupted and not (self._max_issue_number > 0 and num_issues >= self._max_issue_number):
             pulls = self._get(_pulls_url_template.format(per_page=self.per_page, owner=owner, repo=repo, page=page))
             if self.save_pull_pages:
                 _save_json(pulls, _pulls_path_template.format(dst_dir=self.dst_dir, owner=owner, repo=repo, page=page))
@@ -158,14 +161,16 @@ class Crawler(object):
                         pull = self._get(_pull_url_template.format(owner=owner, repo=repo, pull_number=pull_number))
                         pull['linked_issue_numbers'] = linked_issue_numbers
                         _save_json(pull, _pull_path_template.format(dst_dir=self.dst_dir, owner=owner, repo=repo, pull_number=pull_number))
-                        num_pulls += 1
                         for issue_number in linked_issue_numbers:
                             issue = self._get(_issue_url_template.format(owner=owner, repo=repo, issue_number=issue_number))
                             _save_json(issue, _issue_path_template.format(dst_dir=self.dst_dir, owner=owner, repo=repo, issue_number=issue_number))
-                            num_issues += 1
+                            num_issues += 1                        
+                        num_pulls += 1
+                        if self._max_issue_number > 0 and num_issues >= self._max_issue_number:
+                            break
             logging.info('Crawl: finished {} {}/{}'.format(page, owner, repo))
             print('Page {} finished ({}/{})'.format(page, owner, repo))
-            if len(pulls) < self.per_page:
+            if len(pulls) < self.per_page or (self._max_issue_number > 0 and num_issues >= self._max_issue_number):
                 logging.info('Crawl: finished all, {} issues {} pulls {}/{}'.format(num_issues, num_pulls, owner, repo))
                 print('All pages finished, saved {} issues and {} pull requests ({}/{})'.format(num_issues, num_pulls, owner, repo))
                 return
@@ -239,6 +244,8 @@ def main():
         help='seconds to wait before retrying a failed request')
     parser.add_argument('-l', '--log-file', type=str, default=None,
         help='file to write logs to')
+    parser.add_argument('-n', '--max-issue-number', type=int, default=init_params['max_issue_number'].default,
+        help='maximum number of issues to crawl')
     parser.add_argument('repos', metavar='repo', type=str, nargs='+',
         help='full repository name, e.g., "octocat/Hello-World" for the https://github.com/octocat/Hello-World repository')
     args = parser.parse_args()
@@ -256,7 +263,8 @@ def main():
                       per_page=args.per_page,
                       save_pull_pages=args.save_pull_pages,
                       max_request_tries=args.max_request_tries,
-                      request_retry_wait_secs=args.request_retry_wait_secs)
+                      request_retry_wait_secs=args.request_retry_wait_secs,
+                      max_issue_number=args.max_issue_number)
     for r in args.repos:
         n = r.find('/')
         owner = r[:n]
