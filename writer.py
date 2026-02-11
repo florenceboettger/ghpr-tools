@@ -1,11 +1,8 @@
 import argparse
-from bs4 import BeautifulSoup
 import calendar
 import csv
 import json
-import markdown
 import os
-import sys
 import time
 from tqdm import tqdm
 
@@ -18,14 +15,13 @@ _dataset_header = [
     'repo_id',
     'issue_number',
     'issue_title',
-    'issue_body_md',
-    'issue_body_plain',
     'issue_created_at',
     'issue_author_id',
     'issue_author_association',
-    'issue_label_ids',
+    'issue_labels',
     'pull_number',
     'pull_created_at',
+    'pull_updated_at',
     'pull_merged_at',
     'pull_comments',
     'pull_review_comments',
@@ -33,6 +29,15 @@ _dataset_header = [
     'pull_additions',
     'pull_deletions',
     'pull_changed_files',
+    'pull_labels',
+    'pull_milestone',
+    'pull_state',
+    'pull_locked',
+    'pull_draft',
+    'pull_merged',
+    'pull_mergeable',
+    'pull_mergeable_state',
+    'pull_rebaseable',
 ]
 
 _author_association_value = {
@@ -54,21 +59,29 @@ def write_dataset(src_dir, dst_file, limit_rows=0):
     - repo_id: Integer
     - issue_number: Integer
     - issue_title: Text
-    - issue_body_md: Text, in Markdown format, can be empty
-    - issue_body_plain: Text, in plain text, can be empty
     - issue_created_at: Integer, in Unix time
     - issue_author_id: Integer
     - issue_author_association: Integer enum (see values below)
-    - issue_label_ids: Comma-separated integers, can be empty
+    - issue_labels: Comma-separated text, can be empty
     - pull_number: Integer
     - pull_created_at: Integer, in Unix time
-    - pull_merged_at: Integer, in Unix time
+    - pull_updated_at: Integer, in Unix time, can be empty
+    - pull_merged_at: Integer, in Unix time, can be empty
     - pull_comments: Integer
     - pull_review_comments: Integer
     - pull_commits: Integer
     - pull_additions: Integer
     - pull_deletions: Integer
     - pull_changed_files: Integer
+    - pull_labels: Comma-separated text, can be empty
+    - pull_milestone: Text
+    - pull_state: Text
+    - pull_locked: 0 or 1
+    - pull_draft: 0 or 1
+    - pull_merged: 0 or 1
+    - pull_mergeable: 0 or 1
+    - pull_mergeable_state: Text
+    - pull_rebaseable: 0 or 1
     The value of issue_body_plain is converted from issue_body_md. The conversion is
     not always perfect. In some cases, issue_body_plain still contains some Markdown
     tags.
@@ -147,38 +160,36 @@ def _read_json(path):
         return json.load(f)
 
 def _dataset_row(issue, pull):
-    if issue.get('body') is None:
-        issue_body_md = ''
-        issue_body_plain = ''
-    else:
-        issue_body_md = issue['body']
-        issue_body_plain = _md_to_text(issue_body_md)
-    issue_label_ids = ','.join(str(l['id']) for l in issue['labels'])
+    issue_label_ids = ','.join(str(l['name']) for l in issue['labels'])
+    pull_label_ids = ','.join(str(l['name']) for l in pull['labels'])
     return [
         pull['base']['repo']['id'],
         issue['number'],
         issue['title'],
-        issue_body_md,
-        issue_body_plain,
         _iso_to_unix(issue['created_at']),
         issue['user']['id'],
         _author_association_value[issue['author_association']],
         issue_label_ids,
         pull['number'],
         _iso_to_unix(pull['created_at']),
-        _iso_to_unix(pull['merged_at']),
+        _iso_to_unix(pull['updated_at']) if pull['updated_at'] else '',
+        _iso_to_unix(pull['merged_at']) if pull['merged_at'] else '',
         pull['comments'],
         pull['review_comments'],
         pull['commits'],
         pull['additions'],
         pull['deletions'],
         pull['changed_files'],
+        pull_label_ids,
+        pull['milestone']['title'] if pull['milestone'] else '',
+        pull['state'],
+        1 if pull['locked'] else 0,
+        1 if pull['draft'] else 0,
+        1 if pull['merged'] else 0,
+        1 if pull['mergeable'] else 0,
+        pull['mergeable_state'],
+        1 if pull['rebaseable'] else 0,
     ]
-
-def _md_to_text(md):
-    html = markdown.markdown(md)
-    soup = BeautifulSoup(html, features='html.parser')
-    return soup.get_text()
 
 def _iso_to_unix(iso):
     utc_time = time.strptime(iso, '%Y-%m-%dT%H:%M:%SZ')
