@@ -1,18 +1,40 @@
 import argparse
 import calendar
 import csv
+import inspect
 import json
 import os
+import re
 import time
 from tqdm import tqdm
 
 _owner_path_template = os.path.join('{src_dir}', '{owner}')
 _repo_path_template = os.path.join('{src_dir}', '{owner}', '{repo}')
 _pull_path_template = os.path.join('{src_dir}', '{owner}', '{repo}', 'pull-{pull_number}.json')
+_diff_path_template = os.path.join('{src_dir}', '{owner}', '{repo}', 'pull-{pull_number}.diff')
 _issue_path_template = os.path.join('{src_dir}', '{owner}', '{repo}', 'issue-{issue_number}.json')
 
+_diff_file_pattern = re.compile(r'^diff --git a\/(?:.*?) b\/(.*?)\n$')
+_diff_file_anchor_pattern = re.compile(r'(?:---|\+\+\+) \S*?\/(.*?)$')
+
+_sections = [
+    'build/',
+    'cli/',
+    'extensions/',
+    'remote/',
+    'resources/',
+    'scripts/',
+    'src/',
+    'test/',
+    'other ']
+
+_section_attributes = [
+    'changed_files',
+    'additions',
+    'deletions'
+]
+
 _dataset_header = [
-    'repo_id',
     'issue_number',
     'issue_title',
     'issue_created_at',
@@ -40,6 +62,12 @@ _dataset_header = [
     'pull_rebaseable',
 ]
 
+_section_headers = [f'pull_{s[:-1]}_{a}{r}' for r in ['', '_relative'] for a in _section_attributes for s in _sections]
+
+_dataset_header += _section_headers
+
+print(_dataset_header)
+
 _author_association_value = {
     'COLLABORATOR': 0,
     'CONTRIBUTOR': 1,
@@ -51,12 +79,15 @@ _author_association_value = {
     'OWNER': 7,
 }
 
-def write_dataset(src_dir, dst_file, limit_rows=0):
+def write_dataset(src_dir,
+                  dst_file,
+                  limit_rows=0,
+                  start_date="2000-01-01",
+                  end_date="2050-01-01"):
     """Reads JSON files downloaded by the Crawler and writes a CSV file from their
     data.
 
     The CSV file will have the following columns:
-    - repo_id: Integer
     - issue_number: Integer
     - issue_title: Text
     - issue_created_at: Integer, in Unix time
@@ -109,6 +140,8 @@ def write_dataset(src_dir, dst_file, limit_rows=0):
     repo_full_names = []
     repo_num_rows = []
     total_num_rows = 0
+    start_date = _iso_to_unix(start_date + "T00:00:00Z")
+    end_date = _iso_to_unix(end_date + "T00:00:00Z")
     def print_results():
         for r, n in zip(repo_full_names, repo_num_rows):
             print('{}: {:,}'.format(r, n))
@@ -122,12 +155,48 @@ def write_dataset(src_dir, dst_file, limit_rows=0):
             repo_full_name = '{}/{}'.format(owner, repo)
             repo_full_names.append(repo_full_name)
             repo_num_rows.append(0)
+            issue_list = {}
             print('{} ({:,}/{:,})'.format(repo_full_name, i + 1, num_repos))
             for pull_number in tqdm(_sorted_pull_numbers(src_dir, owner, repo)):
                 pull = _read_json(_pull_path_template.format(src_dir=src_dir, owner=owner, repo=repo, pull_number=pull_number))
+                if _iso_to_unix(pull['created_at']) < start_date or _iso_to_unix(pull['created_at']) > end_date:
+                    continue
                 pull['linked_issue_numbers'].sort()
+
+                diff = _read_diff(_diff_path_template.format(src_dir=src_dir, owner=owner, repo=repo, pull_number=pull_number))
+                pull['section_data'] = [{a: 0 for a in _section_attributes} for s in _sections]
+                current_section = len(_sections) - 1
+                current_filename = ''
+                for line in diff:
+                    file_match = _diff_file_pattern.match(line)
+                    if file_match:
+                        filename = file_match.group(1)
+                        if filename != current_filename:
+                            current_section = next((i for (i, s) in enumerate(_sections) if filename.startswith(s)), len(_sections) - 1)
+                            pull['section_data'][current_section]['changed_files'] += 1
+                            current_filename = filename
+                        continue
+
+                    if line.startswith('+') and not _diff_file_anchor_pattern.match(line):
+                        pull['section_data'][current_section]['additions'] += 1
+                        continue
+                    if line.startswith('-') and not _diff_file_anchor_pattern.match(line):
+                        pull['section_data'][current_section]['deletions'] += 1
+                        continue
+                
+                for a in _section_attributes:
+                    if sum([pull['section_data'][i][a] for i in range(len(_sections))]) != pull[a]:
+                        print([pull['section_data'][i][a] for i in range(len(_sections))])
+                        print(sum([pull['section_data'][i][a] for i in range(len(_sections))]))
+                        print(pull[a])
+                        print(pull_number)
+                        return
+
                 for issue_number in pull['linked_issue_numbers']:
                     issue = _read_json(_issue_path_template.format(src_dir=src_dir, owner=owner, repo=repo, issue_number=issue_number))
+                    if _iso_to_unix(pull['created_at']) < start_date or _iso_to_unix(pull['created_at']) > end_date:
+                        continue
+                    issue_list[issue_number] = True
                     dataset.writerow(_dataset_row(issue, pull))
                     repo_num_rows[i] += 1
                     total_num_rows += 1
@@ -135,6 +204,18 @@ def write_dataset(src_dir, dst_file, limit_rows=0):
                         print('Limit of {:,} rows reached'.format(limit_rows))
                         print_results()
                         return
+            for issue_number in tqdm(_sorted_issue_numbers(src_dir, owner, repo)):
+                issue = _read_json(_issue_path_template.format(src_dir=src_dir, owner=owner, repo=repo, issue_number=issue_number))
+                if issue_number in issue_list or _iso_to_unix(pull['created_at']) < start_date or _iso_to_unix(pull['created_at']) > end_date:
+                    continue
+                dataset.writerow(_dataset_row(issue, None))
+                repo_num_rows[i] += 1
+                total_num_rows += 1
+                if total_num_rows == limit_rows:
+                    print('Limit of {:,} rows reached'.format(limit_rows))
+                    print_results()
+                    return
+
     print('Finished')
     print_results()
 
@@ -151,51 +232,62 @@ def _sorted_owner_repo_pairs(src_dir):
 
 def _sorted_pull_numbers(src_dir, owner, repo):
     filenames = os.listdir(_repo_path_template.format(src_dir=src_dir, owner=owner, repo=repo))
-    pull_numbers = [int(f[5:-5]) for f in filenames if f.startswith('pull-')]
+    pull_numbers = [int(f[5:-5]) for f in filenames if f.startswith('pull-') and f.endswith('.json')]
     pull_numbers.sort()
     return pull_numbers
+
+def _sorted_issue_numbers(src_dir, owner, repo):
+    filenames = os.listdir(_repo_path_template.format(src_dir=src_dir, owner=owner, repo=repo))
+    issue_numbers = [int(f[6:-5]) for f in filenames if f.startswith('issue-') and f.endswith('.json')]
+    issue_numbers.sort()
+    return issue_numbers
 
 def _read_json(path):
     with open(path, 'r') as f:
         return json.load(f)
+    
+def _read_diff(path):
+    with open(path, 'r', encoding='utf-8') as f:
+        return f.readlines()
 
 def _dataset_row(issue, pull):
     issue_label_ids = ','.join(str(l['name']) for l in issue['labels'])
-    pull_label_ids = ','.join(str(l['name']) for l in pull['labels'])
+    pull_label_ids = ','.join(str(l['name']) for l in pull['labels']) if pull else ''
+    section_row_data = [(pull['section_data'][i][a] / max(1, (1 if r == '' else pull[a]))) if pull else '' for r in ['', '_relative'] for a in _section_attributes for i in range(len(_sections))]
     return [
-        pull['base']['repo']['id'],
         issue['number'],
         issue['title'],
         _iso_to_unix(issue['created_at']),
         issue['user']['id'],
         _author_association_value[issue['author_association']],
         issue_label_ids,
-        pull['number'],
-        _iso_to_unix(pull['created_at']),
-        _iso_to_unix(pull['updated_at']) if pull['updated_at'] else '',
-        _iso_to_unix(pull['merged_at']) if pull['merged_at'] else '',
-        pull['comments'],
-        pull['review_comments'],
-        pull['commits'],
-        pull['additions'],
-        pull['deletions'],
-        pull['changed_files'],
+        pull['number'] if pull else '',
+        _iso_to_unix(pull['created_at']) if pull else '',
+        _iso_to_unix(pull['updated_at']) if pull and pull['updated_at'] else '',
+        _iso_to_unix(pull['merged_at']) if pull and pull['merged_at'] else '',
+        pull['comments'] if pull else '',
+        pull['review_comments'] if pull else '',
+        pull['commits'] if pull else '',
+        pull['additions'] if pull else '',
+        pull['deletions'] if pull else '',
+        pull['changed_files'] if pull else '',
         pull_label_ids,
-        pull['milestone']['title'] if pull['milestone'] else '',
-        pull['state'],
-        1 if pull['locked'] else 0,
-        1 if pull['draft'] else 0,
-        1 if pull['merged'] else 0,
-        1 if pull['mergeable'] else 0,
-        pull['mergeable_state'],
-        1 if pull['rebaseable'] else 0,
-    ]
+        pull['milestone']['title'] if pull and pull['milestone'] else '',
+        pull['state'] if pull else '',
+        (1 if pull['locked'] else 0) if pull else '',
+        (1 if pull['draft'] else 0) if pull else '',
+        (1 if pull['merged'] else 0) if pull else '',
+        (1 if pull['mergeable'] else 0) if pull else '',
+        pull['mergeable_state'] if pull else '',
+        (1 if pull['rebaseable'] else 0) if pull else '',
+    ] + section_row_data
 
 def _iso_to_unix(iso):
     utc_time = time.strptime(iso, '%Y-%m-%dT%H:%M:%SZ')
     return calendar.timegm(utc_time)
 
 def main():
+    crawl_params = inspect.signature(write_dataset).parameters
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         description='Read JSON files downloaded by the Crawler and write a CSV file from their data. '
                     'The source directory must contain owner/repo/issue-N.json and owner/repo/pull-N.json files. '
@@ -203,6 +295,10 @@ def main():
                     'The destination file will be overwritten if it already exists.')
     parser.add_argument('-l', '--limit-rows', type=int, default=0,
         help='limit number of rows to write, ignored if non-positive')
+    parser.add_argument('-e', '--start-date', type=str, default=crawl_params['start_date'].default,
+        help='date from which to start the crawl, with pattern YYYY-MM-DD')
+    parser.add_argument('-E', '--end-date', type=str, default=crawl_params['end_date'].default,
+        help='date at which to end the crawl, with pattern YYYY-MM-DD')
     parser.add_argument('src_dir', type=str,
         help='source directory')
     parser.add_argument('dst_file', type=str,
