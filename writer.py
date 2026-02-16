@@ -40,7 +40,7 @@ _dataset_header = [
     'issue_created_at',
     'issue_author_id',
     'issue_author_association',
-    'issue_labels',
+    'issue_labels#Lst',
     'pull_number',
     'pull_created_at',
     'pull_updated_at',
@@ -51,8 +51,8 @@ _dataset_header = [
     'pull_additions',
     'pull_deletions',
     'pull_changed_files',
-    'pull_labels',
-    'pull_milestone',
+    'pull_labels#Lst',
+    'pull_milestone#Ord(none,-1,December 2025,January 2026,February 2026,March 2026,April 2026,On Deck,Backlog,Backlog Candidates)',
     'pull_state',
     'pull_locked',
     'pull_draft',
@@ -65,8 +65,6 @@ _dataset_header = [
 _section_headers = [f'pull_{s[:-1]}_{a}{r}' for r in ['', '_relative'] for a in _section_attributes for s in _sections]
 
 _dataset_header += _section_headers
-
-print(_dataset_header)
 
 _author_association_value = {
     'COLLABORATOR': 0,
@@ -164,25 +162,7 @@ def write_dataset(src_dir,
                 pull['linked_issue_numbers'].sort()
 
                 diff = _read_diff(_diff_path_template.format(src_dir=src_dir, owner=owner, repo=repo, pull_number=pull_number))
-                pull['section_data'] = [{a: 0 for a in _section_attributes} for s in _sections]
-                current_section = len(_sections) - 1
-                current_filename = ''
-                for line in diff:
-                    file_match = _diff_file_pattern.match(line)
-                    if file_match:
-                        filename = file_match.group(1)
-                        if filename != current_filename:
-                            current_section = next((i for (i, s) in enumerate(_sections) if filename.startswith(s)), len(_sections) - 1)
-                            pull['section_data'][current_section]['changed_files'] += 1
-                            current_filename = filename
-                        continue
-
-                    if line.startswith('+') and not _diff_file_anchor_pattern.match(line):
-                        pull['section_data'][current_section]['additions'] += 1
-                        continue
-                    if line.startswith('-') and not _diff_file_anchor_pattern.match(line):
-                        pull['section_data'][current_section]['deletions'] += 1
-                        continue
+                _get_section_changes(pull, diff)
                 
                 for a in _section_attributes:
                     if sum([pull['section_data'][i][a] for i in range(len(_sections))]) != pull[a]:
@@ -190,11 +170,10 @@ def write_dataset(src_dir,
                         print(sum([pull['section_data'][i][a] for i in range(len(_sections))]))
                         print(pull[a])
                         print(pull_number)
-                        return
 
                 for issue_number in pull['linked_issue_numbers']:
                     issue = _read_json(_issue_path_template.format(src_dir=src_dir, owner=owner, repo=repo, issue_number=issue_number))
-                    if _iso_to_unix(pull['created_at']) < start_date or _iso_to_unix(pull['created_at']) > end_date:
+                    if _iso_to_unix(issue['created_at']) < start_date or _iso_to_unix(issue['created_at']) > end_date:
                         continue
                     issue_list[issue_number] = True
                     dataset.writerow(_dataset_row(issue, pull))
@@ -206,7 +185,7 @@ def write_dataset(src_dir,
                         return
             for issue_number in tqdm(_sorted_issue_numbers(src_dir, owner, repo)):
                 issue = _read_json(_issue_path_template.format(src_dir=src_dir, owner=owner, repo=repo, issue_number=issue_number))
-                if issue_number in issue_list or _iso_to_unix(pull['created_at']) < start_date or _iso_to_unix(pull['created_at']) > end_date:
+                if issue_number in issue_list or _iso_to_unix(issue['created_at']) < start_date or _iso_to_unix(issue['created_at']) > end_date:
                     continue
                 dataset.writerow(_dataset_row(issue, None))
                 repo_num_rows[i] += 1
@@ -218,6 +197,27 @@ def write_dataset(src_dir,
 
     print('Finished')
     print_results()
+
+def _get_section_changes(pull, diff):
+    pull['section_data'] = [{a: 0 for a in _section_attributes} for s in _sections]
+    current_section = len(_sections) - 1
+    current_filename = ''
+    for line in diff:
+        file_match = _diff_file_pattern.match(line)
+        if file_match:
+            filename = file_match.group(1)
+            if filename != current_filename:
+                current_section = next((i for (i, s) in enumerate(_sections) if filename.startswith(s)), len(_sections) - 1)
+                pull['section_data'][current_section]['changed_files'] += 1
+                current_filename = filename
+            continue
+
+        if line.startswith('+') and not _diff_file_anchor_pattern.match(line):
+            pull['section_data'][current_section]['additions'] += 1
+            continue
+        if line.startswith('-') and not _diff_file_anchor_pattern.match(line):
+            pull['section_data'][current_section]['deletions'] += 1
+            continue
 
 def _sorted_owner_repo_pairs(src_dir):
     pairs = [] # [(owner1,repo1), (owner2,repo2)]
@@ -272,7 +272,7 @@ def _dataset_row(issue, pull):
         pull['deletions'] if pull else '',
         pull['changed_files'] if pull else '',
         pull_label_ids,
-        pull['milestone']['title'] if pull and pull['milestone'] else '',
+        (pull['milestone']['title'] if pull['milestone'] else 'none') if pull else '-1',
         pull['state'] if pull else '',
         (1 if pull['locked'] else 0) if pull else '',
         (1 if pull['draft'] else 0) if pull else '',
@@ -304,7 +304,7 @@ def main():
     parser.add_argument('dst_file', type=str,
         help='destination CSV file')
     args = parser.parse_args()
-    write_dataset(args.src_dir, args.dst_file, limit_rows=args.limit_rows)
+    write_dataset(args.src_dir, args.dst_file, limit_rows=args.limit_rows, start_date=args.start_date, end_date=args.end_date)
 
 if __name__ == '__main__':
     main()
