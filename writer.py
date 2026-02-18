@@ -41,6 +41,8 @@ _dataset_header = [
     'issue_author_id',
     'issue_author_association',
     'issue_labels#Lst',
+    'issue_state',
+    'issue_state_reason',
     'pull_number',
     'pull_created_at',
     'pull_updated_at',
@@ -62,7 +64,7 @@ _dataset_header = [
     'pull_rebaseable',
 ]
 
-_section_headers = [f'pull_{s[:-1]}_{a}{r}' for r in ['', '_relative'] for a in _section_attributes for s in _sections]
+_section_headers = [f'pull_section::{s[:-1]}_{a}{r}' for r in ['', '_relative'] for a in _section_attributes for s in _sections]
 
 _dataset_header += _section_headers
 
@@ -81,7 +83,8 @@ def write_dataset(src_dir,
                   dst_file,
                   limit_rows=0,
                   start_date="2000-01-01",
-                  end_date="2050-01-01"):
+                  end_date="2050-01-01",
+                  probs_file=None):
     """Reads JSON files downloaded by the Crawler and writes a CSV file from their
     data.
 
@@ -144,9 +147,14 @@ def write_dataset(src_dir,
         for r, n in zip(repo_full_names, repo_num_rows):
             print('{}: {:,}'.format(r, n))
         print('Total: {:,}'.format(total_num_rows))
+
+    probs = None
+    if probs_file:
+        probs = _read_probs(probs_file)
+
     with open(dst_file, 'w', newline='') as dataset_file:
         dataset = csv.writer(dataset_file)
-        dataset.writerow(_dataset_header)
+        dataset.writerow(_dataset_header if not probs else _dataset_header + [f"pull_topic::{p.replace(' ', '_')}" for p in probs[0][1:]])
         owner_repo_pairs = _sorted_owner_repo_pairs(src_dir)
         num_repos = len(owner_repo_pairs)
         for i, (owner, repo) in enumerate(owner_repo_pairs):
@@ -155,7 +163,7 @@ def write_dataset(src_dir,
             repo_num_rows.append(0)
             issue_list = {}
             print('{} ({:,}/{:,})'.format(repo_full_name, i + 1, num_repos))
-            for pull_number in tqdm(_sorted_pull_numbers(src_dir, owner, repo)):
+            for j, pull_number in enumerate(tqdm(_sorted_pull_numbers(src_dir, owner, repo))):
                 pull = _read_json(_pull_path_template.format(src_dir=src_dir, owner=owner, repo=repo, pull_number=pull_number))
                 if _iso_to_unix(pull['created_at']) < start_date or _iso_to_unix(pull['created_at']) > end_date:
                     continue
@@ -171,23 +179,27 @@ def write_dataset(src_dir,
                         print(pull[a])
                         print(pull_number)
 
+                if probs:
+                    pull['topics'] = probs[j + 1][1:]
+
                 for issue_number in pull['linked_issue_numbers']:
                     issue = _read_json(_issue_path_template.format(src_dir=src_dir, owner=owner, repo=repo, issue_number=issue_number))
                     if _iso_to_unix(issue['created_at']) < start_date or _iso_to_unix(issue['created_at']) > end_date:
                         continue
                     issue_list[issue_number] = True
-                    dataset.writerow(_dataset_row(issue, pull))
+                    dataset.writerow(_dataset_row(issue, pull=pull, probs=probs != None))
                     repo_num_rows[i] += 1
                     total_num_rows += 1
                     if total_num_rows == limit_rows:
                         print('Limit of {:,} rows reached'.format(limit_rows))
                         print_results()
                         return
+                    
             for issue_number in tqdm(_sorted_issue_numbers(src_dir, owner, repo)):
                 issue = _read_json(_issue_path_template.format(src_dir=src_dir, owner=owner, repo=repo, issue_number=issue_number))
                 if issue_number in issue_list or _iso_to_unix(issue['created_at']) < start_date or _iso_to_unix(issue['created_at']) > end_date:
                     continue
-                dataset.writerow(_dataset_row(issue, None))
+                dataset.writerow(_dataset_row(issue, probs=probs != None))
                 repo_num_rows[i] += 1
                 total_num_rows += 1
                 if total_num_rows == limit_rows:
@@ -249,11 +261,20 @@ def _read_json(path):
 def _read_diff(path):
     with open(path, 'r', encoding='utf-8') as f:
         return f.readlines()
+    
+def _read_probs(path):
+    file = []
+    with open(path, 'r', newline='') as f:
+        reader = csv.reader(f)
+        for row in reader:
+            file.append(row)
+    return file
 
-def _dataset_row(issue, pull):
+def _dataset_row(issue, pull=None, probs=False):
     issue_label_ids = ','.join(str(l['name']) for l in issue['labels'])
     pull_label_ids = ','.join(str(l['name']) for l in pull['labels']) if pull else ''
     section_row_data = [(pull['section_data'][i][a] / max(1, (1 if r == '' else pull[a]))) if pull else '' for r in ['', '_relative'] for a in _section_attributes for i in range(len(_sections))]
+    topic_row_data = (pull['topics'] if pull else [0 for _ in range(15)]) if probs else []
     return [
         issue['number'],
         issue['title'],
@@ -261,10 +282,12 @@ def _dataset_row(issue, pull):
         issue['user']['id'],
         _author_association_value[issue['author_association']],
         issue_label_ids,
+        issue['state'],
+        issue['state_reason'],
         pull['number'] if pull else '',
-        _iso_to_unix(pull['created_at']) if pull else '',
-        _iso_to_unix(pull['updated_at']) if pull and pull['updated_at'] else '',
-        _iso_to_unix(pull['merged_at']) if pull and pull['merged_at'] else '',
+        _iso_to_unix(pull['created_at']) if pull else -1,
+        _iso_to_unix(pull['updated_at']) if pull and pull['updated_at'] else -1,
+        _iso_to_unix(pull['merged_at']) if pull and pull['merged_at'] else -1,
         pull['comments'] if pull else '',
         pull['review_comments'] if pull else '',
         pull['commits'] if pull else '',
@@ -280,7 +303,7 @@ def _dataset_row(issue, pull):
         (1 if pull['mergeable'] else 0) if pull else '',
         pull['mergeable_state'] if pull else '',
         (1 if pull['rebaseable'] else 0) if pull else '',
-    ] + section_row_data
+    ] + section_row_data + topic_row_data
 
 def _iso_to_unix(iso):
     utc_time = time.strptime(iso, '%Y-%m-%dT%H:%M:%SZ')
@@ -299,12 +322,14 @@ def main():
         help='date from which to start the crawl, with pattern YYYY-MM-DD')
     parser.add_argument('-E', '--end-date', type=str, default=crawl_params['end_date'].default,
         help='date at which to end the crawl, with pattern YYYY-MM-DD')
+    parser.add_argument('-p', '--probs-file', type=str, default=crawl_params['probs_file'].default,
+        help='file including probabilities')
     parser.add_argument('src_dir', type=str,
         help='source directory')
     parser.add_argument('dst_file', type=str,
         help='destination CSV file')
     args = parser.parse_args()
-    write_dataset(args.src_dir, args.dst_file, limit_rows=args.limit_rows, start_date=args.start_date, end_date=args.end_date)
+    write_dataset(args.src_dir, args.dst_file, limit_rows=args.limit_rows, start_date=args.start_date, end_date=args.end_date, probs_file=args.probs_file)
 
 if __name__ == '__main__':
     main()
