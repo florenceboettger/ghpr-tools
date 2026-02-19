@@ -38,6 +38,7 @@ _dataset_header = [
     'issue_number',
     'issue_title',
     'issue_created_at',
+    'issue_closed_at',
     'issue_author_id',
     'issue_author_association',
     'issue_labels#Lst',
@@ -64,7 +65,7 @@ _dataset_header = [
     'pull_rebaseable',
 ]
 
-_section_headers = [f'pull_section::{s[:-1]}_{a}{r}' for r in ['', '_relative'] for a in _section_attributes for s in _sections]
+_section_headers = [f'pull_section::{s[:-1]}_{a}' for a in _section_attributes for s in _sections]
 
 _dataset_header += _section_headers
 
@@ -187,7 +188,7 @@ def write_dataset(src_dir,
                     if _iso_to_unix(issue['created_at']) < start_date or _iso_to_unix(issue['created_at']) > end_date:
                         continue
                     issue_list[issue_number] = True
-                    dataset.writerow(_dataset_row(issue, pull=pull, probs=probs != None))
+                    dataset.writerow(_dataset_row(issue, pull=pull, probs=len(probs[0]) - 1 if probs else 0))
                     repo_num_rows[i] += 1
                     total_num_rows += 1
                     if total_num_rows == limit_rows:
@@ -199,7 +200,7 @@ def write_dataset(src_dir,
                 issue = _read_json(_issue_path_template.format(src_dir=src_dir, owner=owner, repo=repo, issue_number=issue_number))
                 if issue_number in issue_list or _iso_to_unix(issue['created_at']) < start_date or _iso_to_unix(issue['created_at']) > end_date:
                     continue
-                dataset.writerow(_dataset_row(issue, probs=probs != None))
+                dataset.writerow(_dataset_row(issue, probs=len(probs[0]) - 1 if probs else 0))
                 repo_num_rows[i] += 1
                 total_num_rows += 1
                 if total_num_rows == limit_rows:
@@ -270,15 +271,16 @@ def _read_probs(path):
             file.append(row)
     return file
 
-def _dataset_row(issue, pull=None, probs=False):
+def _dataset_row(issue, pull=None, probs=0):
     issue_label_ids = ','.join(str(l['name']) for l in issue['labels'])
     pull_label_ids = ','.join(str(l['name']) for l in pull['labels']) if pull else ''
-    section_row_data = [(pull['section_data'][i][a] / max(1, (1 if r == '' else pull[a]))) if pull else '' for r in ['', '_relative'] for a in _section_attributes for i in range(len(_sections))]
-    topic_row_data = (pull['topics'] if pull else [0 for _ in range(15)]) if probs else []
+    section_row_data = [(pull['section_data'][i][a]) if pull else '' for a in _section_attributes for i in range(len(_sections))]
+    topic_row_data = pull['topics'] if pull else [0 for _ in range(probs)]
     return [
         issue['number'],
         issue['title'],
         _iso_to_unix(issue['created_at']),
+        _iso_to_unix(issue['closed_at']) if issue['closed_at'] else '',
         issue['user']['id'],
         _author_association_value[issue['author_association']],
         issue_label_ids,
