@@ -170,15 +170,21 @@ def write_dataset(src_dir,
                     continue
                 pull['linked_issue_numbers'].sort()
 
-                diff = _read_diff(_diff_path_template.format(src_dir=src_dir, owner=owner, repo=repo, pull_number=pull_number))
+                diff = None
+                try:
+                    diff = _read_diff(_diff_path_template.format(src_dir=src_dir, owner=owner, repo=repo, pull_number=pull_number))
+                except:
+                    diff = ""
                 _get_section_changes(pull, diff)
                 
                 for a in _section_attributes:
                     if sum([pull['section_data'][i][a] for i in range(len(_sections))]) != pull[a]:
+                        print(a)
                         print([pull['section_data'][i][a] for i in range(len(_sections))])
                         print(sum([pull['section_data'][i][a] for i in range(len(_sections))]))
                         print(pull[a])
                         print(pull_number)
+                        pull[a] = sum([pull['section_data'][i][a] for i in range(len(_sections))])
 
                 if probs:
                     pull['topics'] = probs[j + 1][1:]
