@@ -55,7 +55,7 @@ _dataset_header = [
     'pull_deletions',
     'pull_changed_files',
     'pull_labels#Lst',
-    'pull_milestone#Ord(none,-1,December 2025,January 2026,February 2026,March 2026,April 2026,On Deck,Backlog,Backlog Candidates)',
+    'pull_milestone#Ord(none,nopull,September 2025,October 2025,November 2025,December 2025,January 2026,February 2026,March 2026,April 2026,On Deck,Backlog,Backlog Candidates)',
     'pull_state',
     'pull_locked',
     'pull_draft',
@@ -184,7 +184,11 @@ def write_dataset(src_dir,
                     pull['topics'] = probs[j + 1][1:]
 
                 for issue_number in pull['linked_issue_numbers']:
-                    issue = _read_json(_issue_path_template.format(src_dir=src_dir, owner=owner, repo=repo, issue_number=issue_number))
+                    issue = None
+                    try:
+                        issue = _read_json(_issue_path_template.format(src_dir=src_dir, owner=owner, repo=repo, issue_number=issue_number))
+                    except:
+                        continue
                     if _iso_to_unix(issue['created_at']) < start_date or _iso_to_unix(issue['created_at']) > end_date:
                         continue
                     issue_list[issue_number] = True
@@ -287,9 +291,9 @@ def _dataset_row(issue, pull=None, probs=0):
         issue['state'],
         issue['state_reason'],
         pull['number'] if pull else '',
-        _iso_to_unix(pull['created_at']) if pull else -1,
-        _iso_to_unix(pull['updated_at']) if pull and pull['updated_at'] else -1,
-        _iso_to_unix(pull['merged_at']) if pull and pull['merged_at'] else -1,
+        _iso_to_unix(pull['created_at']) if pull else '',
+        _iso_to_unix(pull['updated_at']) if pull and pull['updated_at'] else '',
+        _iso_to_unix(pull['merged_at']) if pull and pull['merged_at'] else '',
         pull['comments'] if pull else '',
         pull['review_comments'] if pull else '',
         pull['commits'] if pull else '',
@@ -297,7 +301,7 @@ def _dataset_row(issue, pull=None, probs=0):
         pull['deletions'] if pull else '',
         pull['changed_files'] if pull else '',
         pull_label_ids,
-        (pull['milestone']['title'] if pull['milestone'] else 'none') if pull else '-1',
+        (pull['milestone']['title'] if pull['milestone'] else 'none') if pull else 'nopull',
         pull['state'] if pull else '',
         (1 if pull['locked'] else 0) if pull else '',
         (1 if pull['draft'] else 0) if pull else '',

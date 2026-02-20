@@ -222,8 +222,10 @@ class Crawler(object):
         self._interrupted = False
         logging.info('Pulls crawl: starting {} {}/{}'.format(start_page_pulls, owner, repo))
         print('Pulls: Starting from page {} ({}/{})'.format(start_page_pulls, owner, repo))
-        while not self._interrupted and not (self._max_issue_number > 0 and num_issues >= self._max_issue_number):
-            pulls = self._get_json(_pulls_url_template.format(per_page=self.per_page, owner=owner, repo=repo, page=page))
+        while not self._interrupted and not (self._max_issue_number > 0 and num_issues >= self._max_issue_number) and not (end_page_pulls > 0 and page > end_page_pulls):
+            pulls, ok = self._get_json(_pulls_url_template.format(per_page=self.per_page, owner=owner, repo=repo, page=page))
+            if not ok:
+                continue
             if self.save_pull_pages:
                 _save_json(pulls, _pulls_path_template.format(dst_dir=self.dst_dir, owner=owner, repo=repo, page=page))
             for p in pulls:
@@ -231,14 +233,20 @@ class Crawler(object):
                     continue
                 linked_issue_numbers = _extract_linked_issue_numbers(p.get('body'), linked_issues_regex)
                 pull_number = p['number']
-                pull = self._get_json(_pull_url_template.format(owner=owner, repo=repo, pull_number=pull_number))
+                pull, ok = self._get_json(_pull_url_template.format(owner=owner, repo=repo, pull_number=pull_number))
+                if not ok:
+                    continue
                 pull['linked_issue_numbers'] = linked_issue_numbers
                 diff_url = pull['diff_url']
-                diff = self._get(diff_url)
+                diff, ok = self._get(diff_url)
+                if not ok:
+                    continue
                 _save_txt(diff.content, _diff_path_template.format(dst_dir=self.dst_dir, owner=owner, repo=repo, pull_number=pull_number))
                 _save_json(pull, _pull_path_template.format(dst_dir=self.dst_dir, owner=owner, repo=repo, pull_number=pull_number))
                 for issue_number in linked_issue_numbers:
-                    issue = self._get_json(_issue_url_template.format(owner=owner, repo=repo, issue_number=issue_number))
+                    issue, ok = self._get_json(_issue_url_template.format(owner=owner, repo=repo, issue_number=issue_number))
+                    if not ok:
+                        continue
                     _save_json(issue, _issue_path_template.format(dst_dir=self.dst_dir, owner=owner, repo=repo, issue_number=issue_number))
                     num_issues += 1
                     list_issues[issue_number] = True
@@ -254,20 +262,22 @@ class Crawler(object):
                     return
                 break
             page += 1
-            if end_page_pulls > 0 and page > end_page_pulls:
-                break
 
         page = start_page_issues
         num_issues = 0
         logging.info('Issues crawl: starting {} {}/{}'.format(start_page_issues, owner, repo))
         print('Issues: Starting from page {} ({}/{})'.format(start_page_issues, owner, repo))
-        while not self._interrupted and not (self._max_issue_number > 0 and num_issues >= self._max_issue_number):
-            issues = self._get_json(_issues_url_template.format(per_page=self.per_page, owner=owner, repo=repo, page=page))
+        while not self._interrupted and not (self._max_issue_number > 0 and num_issues >= self._max_issue_number) and not (end_page_issues > 0 and page > end_page_issues):
+            issues, ok = self._get_json(_issues_url_template.format(per_page=self.per_page, owner=owner, repo=repo, page=page))
+            if not ok:
+                continue
             for i in issues:
                 issue_number = i['number']
                 if issue_number in list_issues or _iso_to_unix(i['created_at']) < self.start_date or _iso_to_unix(i['created_at']) > self.end_date:
                     continue
-                issue = self._get_json(_issue_url_template.format(owner=owner, repo=repo, issue_number=issue_number))
+                issue, ok = self._get_json(_issue_url_template.format(owner=owner, repo=repo, issue_number=issue_number))
+                if not ok:
+                    continue
                 _save_json(issue, _issue_path_template.format(dst_dir=self.dst_dir, owner=owner, repo=repo, issue_number=issue_number))
                 num_issues += 1
                 if self._max_issue_number > 0 and num_issues >= self._max_issue_number:
@@ -281,11 +291,9 @@ class Crawler(object):
                     return
                 break
             page += 1
-            if end_page_issues > 0 and page > end_page_issues:
-                break
 
     def _get_starting_page(self, url):
-        r = self._get(url.format(page=1))
+        r, ok = self._get(url.format(page=1))
         link = r.headers['Link']
         last_page = int(_last_page_pattern.findall(link)[0])
         start_page = self._find_start_page(url, 1, last_page)
@@ -294,7 +302,7 @@ class Crawler(object):
     def _find_start_page(self, url, start, end):
         mid = round((start + end)/2)        
         print('querying at {} between {} and {}'.format(mid, start, end))
-        pulls = self._get_json(url.format(page=mid))
+        pulls, ok = self._get_json(url.format(page=mid))
         first_date = _iso_to_unix(pulls[0]['created_at'])
         last_date = _iso_to_unix(pulls[-1]['created_at'])
 
@@ -311,7 +319,7 @@ class Crawler(object):
         return mid
 
     def _get_ending_page(self, url):
-        r = self._get(url.format(page=1))
+        r, ok = self._get(url.format(page=1))
         link = r.headers['Link']
         last_page = int(_last_page_pattern.findall(link)[0])
         start_page = self._find_end_page(url, 1, last_page)
@@ -320,11 +328,9 @@ class Crawler(object):
     def _find_end_page(self, url, start, end):
         mid = round((start + end)/2)
         print('querying at {} between {} and {}'.format(mid, start, end))
-        pulls = self._get_json(url.format(page=mid))
+        pulls, ok = self._get_json(url.format(page=mid))
         first_date = _iso_to_unix(pulls[0]['created_at'])
         last_date = _iso_to_unix(pulls[-1]['created_at'])
-
-        print('querying between {} and {}'.format(start, end))
 
         if start == end:
             print('first: {}, last: {}, goal: {}'.format(first_date, last_date, self.start_date))
@@ -339,15 +345,19 @@ class Crawler(object):
         return mid
 
     def _get_json(self, url):
-        return self._get(url).json()
+        r, ok = self._get(url)
+        if ok:
+            return r.json(), ok
+        else:
+            return {}, ok
 
 
     def _get(self, url):
         tries = 0
         while True:
-            r = self._try_to_get(url)
+            r, ok = self._try_to_get(url)
             if r is not None:
-                return r
+                return r, ok
             tries += 1
             if tries >= self.max_request_tries:
                 print('Request failed {} times, aborting'.format(tries))
@@ -360,20 +370,22 @@ class Crawler(object):
             r = requests.get(url, headers=self._headers)
             if not r.ok:
                 logging.error('Get: not ok: {} {} {} {}'.format(url, r.status_code, r.headers, r.text))
+                if r.status_code == 404:
+                    return {}, False
                 if 'X-Ratelimit-Remaining' in r.headers and int(r.headers['X-Ratelimit-Remaining']) < 1 and 'X-Ratelimit-Reset' in r.headers:
                     ratelimit_wait_secs = int(r.headers['X-Ratelimit-Reset']) - int(time.time()) + 1
                     logging.info('Get: waiting {} secs for rate limit reset'.format(ratelimit_wait_secs))
                     print('Rate limit reached, waiting {} secs for reset'.format(ratelimit_wait_secs))
                     time.sleep(ratelimit_wait_secs)
                     return self._try_to_get(url)
-                return None
+                return None, False
         except Exception as e:
             logging.error('Get: exception: {} {}'.format(url, e))
             return None
         if 'Content-Type' in r.headers and 'json' in r.headers['Content-Type'] and isinstance(r.json(), dict) and 'message' in r.json():
             logging.error('Get: error: {} {}'.format(url, r.json()))
             return None
-        return r
+        return r, True
 
 def main():
     init_params = inspect.signature(Crawler.__init__).parameters
@@ -444,7 +456,8 @@ def main():
                       max_request_tries=args.max_request_tries,
                       request_retry_wait_secs=args.request_retry_wait_secs,
                       max_issue_number=args.max_issue_number,
-                      start_date=args.start_date)
+                      start_date=args.start_date,
+                      end_date=args.end_date)
     for r in args.repos:
         n = r.find('/')
         owner = r[:n]
@@ -453,7 +466,9 @@ def main():
             crawler.crawl(owner,
                           repo,
                           start_page_pulls=args.start_page_pulls,
-                          start_page_issues=args.start_page_issues)
+                          start_page_issues=args.start_page_issues,
+                          end_page_pulls=args.end_page_pulls,
+                          end_page_issues=args.end_page_issues)
         except Exception as e:
             logging.error('Main: exception: {}/{} {}'.format(owner, repo, e))
             print('Terminated with error: {} ({}/{})'.format(e, owner, repo))
