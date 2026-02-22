@@ -55,7 +55,7 @@ _dataset_header = [
     'pull_deletions',
     'pull_changed_files',
     'pull_labels#Lst',
-    'pull_milestone#Ord(none,nopull,September 2025,October 2025,November 2025,December 2025,January 2026,February 2026,March 2026,April 2026,On Deck,Backlog,Backlog Candidates)',
+    'pull_milestone#Ord(none,nopull,July 2025,August 2025,September 2025,October 2025,November 2025,December 2025,January 2026,February 2026,March 2026,April 2026,On Deck,Backlog,Backlog Candidates)',
     'pull_state',
     'pull_locked',
     'pull_draft',
@@ -153,7 +153,7 @@ def write_dataset(src_dir,
     if probs_file:
         probs = _read_probs(probs_file)
 
-    with open(dst_file, 'w', newline='') as dataset_file:
+    with open(dst_file, 'w', newline='', encoding='utf-8') as dataset_file:
         dataset = csv.writer(dataset_file)
         dataset.writerow(_dataset_header if not probs else _dataset_header + [f"pull_topic::{p.replace(' ', '_')}" for p in probs[0][1:]])
         owner_repo_pairs = _sorted_owner_repo_pairs(src_dir)

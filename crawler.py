@@ -307,7 +307,6 @@ class Crawler(object):
         last_date = _iso_to_unix(pulls[-1]['created_at'])
 
         if start == end:
-            print('first: {}, last: {}, goal: {}'.format(first_date, last_date, self.start_date))
             if self.start_date > last_date:
                 return mid + 1
             return mid
@@ -315,6 +314,8 @@ class Crawler(object):
         if self.start_date < first_date:
             return self._find_start_page(url, start, mid)
         if self.start_date > last_date:
+            if end - start == 1:
+                return self._find_start_page(url, start + 1, end)
             return self._find_start_page(url, mid, end)
         return mid
 
@@ -333,7 +334,6 @@ class Crawler(object):
         last_date = _iso_to_unix(pulls[-1]['created_at'])
 
         if start == end:
-            print('first: {}, last: {}, goal: {}'.format(first_date, last_date, self.start_date))
             if self.end_date < first_date:
                 return mid - 1
             return mid
@@ -341,6 +341,8 @@ class Crawler(object):
         if self.end_date < first_date:
             return self._find_end_page(url, start, mid)
         if self.end_date > last_date:
+            if end - start == 1:
+                return self._find_start_page(url, start + 1, end)
             return self._find_end_page(url, mid, end)
         return mid
 
